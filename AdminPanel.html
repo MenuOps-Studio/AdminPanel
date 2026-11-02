@@ -93,7 +93,6 @@
 
       let itemsArray = typeof order.items === 'string' ? JSON.parse(order.items) : order.items;
       
-      // 1. Δημιουργία λίστας προϊόντων με Flexbox για τέλεια στοίχιση (Τιμή καρφωμένη δεξιά αν χρειαστεί στο μέλλον)
       let itemsHtml = '';
       itemsArray.forEach(item => {
         itemsHtml += `
@@ -116,62 +115,61 @@
         `;
       });
 
-      // 2. ΔΥΝΑΜΙΚΑ ΔΕΔΟΜΕΝΑ ΜΑΓΑΖΙΟΥ (Παραμετροποίηση βάσει του λογαριασμού)
-      // Τραβάει το όνομα του εστιατορίου που έχει κάνει login (αν δεν το βρει, βάζει "ΠΑΡΑΓΓΕΛΙΑ")
       const shopName = restaurantData && restaurantData.name ? restaurantData.name : 'ΠΑΡΑΓΓΕΛΙΑ';
       
-      // 3. Οπτική διαμόρφωση για Τραπέζι ή Πακέτο
-      const tableOrTakeaway = order.table_number ? `ΤΡΑΠΕΖΙ: ${order.table_number}` : 'ΠΑΚΕΤΟ';
-      
-      const customerHtml = order.customer_last_name ? 
-        `<div style="margin-top: 10px; font-size: 16px; font-weight: bold;">
-          Όνομα: ${order.customer_last_name}
-        </div>` : '';
+      // ΝΕΑ ΕΞΥΠΝΗ ΛΟΓΙΚΗ ΓΙΑ ΤΟ ΧΑΡΤΑΚΙ (DELIVERY / ΤΡΑΠΕΖΙ / TAKEAWAY)
+      let orderTypeBanner = '';
+      let customerDetails = '';
 
-      // 4. Το τελικό Design της Απόδειξης (CSS)
+      if (order.order_type === 'DELIVERY') {
+        orderTypeBanner = '🛵 DELIVERY';
+        customerDetails = `
+          <div style="margin-top: 10px; font-size: 15px; text-align: left; padding: 5px; border: 1px dashed #000;">
+            <strong>Ονομ/νυμο:</strong> ${order.customer_last_name || '-'}<br>
+            <strong>Διεύθυνση:</strong> ${order.customer_address || 'Δεν δηλώθηκε'}<br>
+            <strong>Τηλέφωνο:</strong> ${order.customer_phone || '-'}
+          </div>`;
+      } else if (order.order_type === 'DINE_IN' || order.table_number) {
+        orderTypeBanner = `🍽️ ΤΡΑΠΕΖΙ: ${order.table_number || '-'}`;
+        if (order.customer_last_name) {
+          customerDetails = `<div style="margin-top: 10px; font-size: 15px;"><strong>Όνομα:</strong> ${order.customer_last_name}</div>`;
+        }
+      } else {
+        orderTypeBanner = '🛍️ ΠΑΚΕΤΟ (TAKEAWAY)';
+        if (order.customer_last_name) {
+          customerDetails = `<div style="margin-top: 10px; font-size: 15px;"><strong>Όνομα:</strong> ${order.customer_last_name}</div>`;
+        }
+      }
+
       printDiv.innerHTML = `
         <style>
           @media print {
-            @page { margin: 0; } /* ΚΟΜΒΙΚΟ: Αφαιρεί τις ημερομηνίες και τα links του Netlify από τον browser */
+            @page { margin: 0; } 
             body * { visibility: hidden; }
             #printArea, #printArea * { visibility: visible; }
-            #printArea { 
-              position: absolute; 
-              left: 0; 
-              top: 0; 
-              width: 80mm; /* Ακριβές μέγεθος θερμικού */
-              padding: 15px 10px; 
-              margin: 0; 
-              font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; 
-              color: #000; 
-            }
+            #printArea { position: absolute; left: 0; top: 0; width: 80mm; padding: 15px 10px; margin: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #000; }
           }
         </style>
         
-        <!-- Header με το δυναμικό όνομα καταστήματος -->
         <div style="text-align: center; padding-bottom: 10px; border-bottom: 2px dashed #000; margin-bottom: 15px;">
           <h1 style="font-size: 26px; font-weight: 900; margin: 0; text-transform: uppercase;">${shopName}</h1>
           <p style="font-size: 13px; margin: 5px 0 0 0; color: #333;">${dateString} - ${timeString}</p>
         </div>
 
-        <!-- Κυρίως στοιχεία παραγγελίας -->
         <div style="text-align: center; margin-bottom: 20px;">
           <h2 style="font-size: 42px; font-weight: 900; margin: 0 0 10px 0; line-height: 1;">
             #${order.daily_order_number || '-'}
           </h2>
-          <!-- Μαύρο κουτί (Inverted) για να ξεχωρίζει από μακριά -->
           <div style="background-color: #000; color: #fff; padding: 8px; font-size: 20px; font-weight: bold; border-radius: 4px;">
-            ${tableOrTakeaway}
+            ${orderTypeBanner}
           </div>
-          ${customerHtml}
+          ${customerDetails}
         </div>
         
-        <!-- Λίστα Προϊόντων -->
         <div style="margin-bottom: 15px;">
           ${itemsHtml}
         </div>
         
-        <!-- Σύνολο & Σχόλια -->
         <div style="border-top: 2px dashed #000; padding-top: 15px;">
           <div style="display: flex; justify-content: space-between; font-size: 20px; font-weight: 900;">
             <span>ΣΥΝΟΛΟ</span>
@@ -358,7 +356,7 @@
       const { data: rData } = await db.from("reservations").select("*").eq("restaurant_id", restData.id).order('date', { ascending: false });
       reservationsData = rData || [];
       
-      // Fetch Orders (με λογική απόκρυψης - Retention)
+      // Fetch Orders
       const retentionHours = restData.orders_retention_hours || 12;
       const now = new Date();
       const { data: ordData } = await db.from("orders").select("*").eq("restaurant_id", restData.id).order('created_at', { ascending: false });
@@ -374,9 +372,17 @@
       document.getElementById('topControls').classList.remove('hidden');
       document.getElementById('tabsContainer').classList.remove('hidden');
       
+      // ΝΕΑ ΛΟΓΙΚΗ ΓΙΑ ΔΙΑΚΟΠΤΕΣ: Αν δεν έχει κρατήσεις, κρύψε το tab
+      const resTab = document.getElementById('tab-reservations');
+      if (restaurantData.has_reservations === false) {
+        if (resTab) resTab.style.display = 'none';
+        if (activeTab === 'reservations') activeTab = 'orders';
+      } else {
+        if (resTab) resTab.style.display = 'block';
+      }
+
       switchTab(activeTab);
     }
-
     window.switchTab = function(tab) {
       activeTab = tab;
       const tabs = ['orders', 'products', 'ingredients', 'reservations'];
@@ -614,13 +620,15 @@
 
       if (reservation.email && reservation.email.trim() !== "") {
         try {
-          const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+          // Η ΝΕΑ ΜΑΣ ΑΣΦΑΛΗΣ ΚΛΗΣΗ ΣΤΟ BACKEND
+          const response = await fetch('https://yolfsfforkibqvagahoq.supabase.co/functions/v1/send-email', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+            },
             body: JSON.stringify({
-              service_id: 'service_t7rq0kq',
               template_id: restaurant.email_template_id,
-              user_id: 'TR0cDisVNKLl4sAOE',
               template_params: {
                 name: reservation.name,
                 email: reservation.email,
@@ -636,7 +644,9 @@
           if (response.ok) {
             alert("Το email ενημέρωσης στάλθηκε στον πελάτη!");
           } else {
-            alert("Σφάλμα EmailJS. Δες την κονσόλα!");
+            const errData = await response.json();
+            console.error("Σφάλμα από Edge Function:", errData);
+            alert("Σφάλμα αποστολής Email. Δες την κονσόλα!");
           }
         } catch (error) {
           console.error("Σφάλμα δικτύου:", error);
