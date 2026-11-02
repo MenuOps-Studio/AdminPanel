@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Menu Admin - D Brothers / Makan</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    /* Ρυθμίσεις για την Εκτύπωση στον Θερμικό (80mm) */
+    @media print {
+      body * { visibility: hidden; }
+      #printArea, #printArea * { visibility: visible; }
+      #printArea { position: absolute; left: 0; top: 0; width: 80mm; padding: 0; margin: 0; }
+    }
+    .bg-animated {
+      background: linear-gradient(-45deg, #a69c8a, #b3a997, #998f7c, #c0b7a5);
+      background-size: 400% 400%;
+      animation: gradientBG 15s ease infinite;
+    }
+    @keyframes gradientBG {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+  </style>
+</head>
+<body class="bg-animated font-sans text-stone-900">
+  
+  <div id="app"></div>
+
+  <script>
+    const SUPABASE_URL = 'https://yolfsfforkibqvagahoq.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlvbGZzZmZvcmtpYnF2YWdhaG9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk1NDgxNTgsImV4cCI6MjA5NTEyNDE1OH0.vjjYyAag1TPK4trtUaESc8UAZXtefect-cDG9abSpqg';
+    
+    const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let currentUser = null;
+    let restaurantData = null;
+    let productsData = [];
+    let ingredientsData = []; 
+    let reservationsData = [];
+    let ordersData = []; // Αποθήκευση Παραγγελιών
+    let searchTerm = ""; 
+    let activeTab = "orders"; // Το κάνουμε προεπιλεγμένο Tab για ευκολία
+
+    const categorySynonyms = {
+      "ορεκτικα": ["starters", "appetizers", "πρωτα"],
+      "πιτσες": ["pizzas", "pizza", "πιτσα"],
+      "σαλατες": ["salads", "σαλατα"],
+      "κυριως πιατα": ["mains", "κυριως", "main courses", "πιατα"],
+      "επιδορπια": ["desserts", "sweets", "γλυκα", "γλυκο"],
+      "ποτα": ["drinks", "beverages", "αναψυκτικα", "νερα"],
+      "burger": ["μπεργκερ", "μπεργκερς", "burgers"]
+    };
+
+    function normalizeText(text) {
+      if (!text) return "";
+      return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    }
+
+    // Ηχητική Ειδοποίηση μέσω Web Audio API (Χωρίς εξωτερικά αρχεία)
+    function playNotificationSound() {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      function playBeep(freq, time) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(1, ctx.currentTime + time);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + time + 0.3);
+        osc.start(ctx.currentTime + time);
+        osc.stop(ctx.currentTime + time + 0.3);
+      }
+      playBeep(880, 0);   
+      playBeep(1100, 0.2); 
+    }
+
+    // Συνάρτηση Εκτύπωσης
+    window.printOrderReceipt = function(order) {
+      let printDiv = document.getElementById('printArea');
+      if (!printDiv) {
+        printDiv = document.createElement('div');
+        printDiv.id = 'printArea';
+        document.body.appendChild(printDiv);
+      }
+
+      const dateObj = new Date(order.created_at);
+      const timeString = dateObj.toLocaleTimeString('el-GR', { hour: '2-digit', minute: '2-digit' });
+      const dateString = dateObj.toLocaleDateString('el-GR');
+
+      let itemsArray = typeof order.items === 'string' ? JSON.parse(order.items) : order.items;
+      
+      // 1. Δημιουργία λίστας προϊόντων με Flexbox για τέλεια στοίχιση (Τιμή καρφωμένη δεξιά αν χρειαστεί στο μέλλον)
+      let itemsHtml = '';
+      itemsArray.forEach(item => {
+        itemsHtml += `
+          <div style="margin-bottom: 8px;">
+            <div style="display: flex; justify-content: space-between; font-size: 16px; font-weight: bold; line-height: 1.2;">
+              <div style="flex-grow: 1;">
+                <span style="display: inline-block; width: 28px; font-weight: 900;">${item.quantity}x</span> 
+                ${item.name}
+              </div>
+            </div>
+            ${item.removedIngredients && item.removedIngredients.length > 0 ? 
+              `<div style="font-size: 13px; margin-left: 32px; margin-top: 2px;">
+                - Χωρίς: ${item.removedIngredients.join(', ')}
+              </div>` : ''}
+            ${item.itemNote ? 
+              `<div style="font-size: 13px; font-style: italic; margin-left: 32px; margin-top: 2px;">
+                * ${item.itemNote}
+              </div>` : ''}
+          </div>
+        `;
+      });
+
+      // 2. ΔΥΝΑΜΙΚΑ ΔΕΔΟΜΕΝΑ ΜΑΓΑΖΙΟΥ (Παραμετροποίηση βάσει του λογαριασμού)
+      // Τραβάει το όνομα του εστιατορίου που έχει κάνει login (αν δεν το βρει, βάζει "ΠΑΡΑΓΓΕΛΙΑ")
+      const shopName = restaurantData && restaurantData.name ? restaurantData.name : 'ΠΑΡΑΓΓΕΛΙΑ';
+      
+      // 3. Οπτική διαμόρφωση για Τραπέζι ή Πακέτο
+      const tableOrTakeaway = order.table_number ? `ΤΡΑΠΕΖΙ: ${order.table_number}` : 'ΠΑΚΕΤΟ';
+      
+      const customerHtml = order.customer_last_name ? 
+        `<div style="margin-top: 10px; font-size: 16px; font-weight: bold;">
+          Όνομα: ${order.customer_last_name}
+        </div>` : '';
+
+      // 4. Το τελικό Design της Απόδειξης (CSS)
+      printDiv.innerHTML = `
+        <style>
+          @media print {
+            @page { margin: 0; } /* ΚΟΜΒΙΚΟ: Αφαιρεί τις ημερομηνίες και τα links του Netlify από τον browser */
+            body * { visibility: hidden; }
+            #printArea, #printArea * { visibility: visible; }
+            #printArea { 
+              position: absolute; 
+              left: 0; 
+              top: 0; 
+              width: 80mm; /* Ακριβές μέγεθος θερμικού */
+              padding: 15px 10px; 
+              margin: 0; 
+              font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; 
+              color: #000; 
+            }
+          }
+        </style>
+        
+        <!-- Header με το δυναμικό όνομα καταστήματος -->
+        <div style="text-align: center; padding-bottom: 10px; border-bottom: 2px dashed #000; margin-bottom: 15px;">
+          <h1 style="font-size: 26px; font-weight: 900; margin: 0; text-transform: uppercase;">${shopName}</h1>
+          <p style="font-size: 13px; margin: 5px 0 0 0; color: #333;">${dateString} - ${timeString}</p>
+        </div>
+
+        <!-- Κυρίως στοιχεία παραγγελίας -->
+        <div style="text-align: center; margin-bottom: 20px;">
+          <h2 style="font-size: 42px; font-weight: 900; margin: 0 0 10px 0; line-height: 1;">
+            #${order.daily_order_number || '-'}
+          </h2>
+          <!-- Μαύρο κουτί (Inverted) για να ξεχωρίζει από μακριά -->
+          <div style="background-color: #000; color: #fff; padding: 8px; font-size: 20px; font-weight: bold; border-radius: 4px;">
+            ${tableOrTakeaway}
+          </div>
+          ${customerHtml}
+        </div>
+        
+        <!-- Λίστα Προϊόντων -->
+        <div style="margin-bottom: 15px;">
+          ${itemsHtml}
+        </div>
+        
+        <!-- Σύνολο & Σχόλια -->
+        <div style="border-top: 2px dashed #000; padding-top: 15px;">
+          <div style="display: flex; justify-content: space-between; font-size: 20px; font-weight: 900;">
+            <span>ΣΥΝΟΛΟ</span>
+            <span>€${Number(order.total_amount).toFixed(2)}</span>
+          </div>
+          ${order.notes ? 
+            `<div style="margin-top: 15px; font-size: 14px; padding: 10px; border: 2px solid #000; border-radius: 4px;">
+              <strong>Σχόλιο Πελάτη:</strong><br>${order.notes}
+            </div>` : ''}
+          <p style="text-align: center; font-size: 12px; margin-top: 25px; font-weight: bold;">~ Καλή Όρεξη ~</p>
+        </div>
+      `;
+
+      window.print();
+    };
+
+    async function init() {
+      const { data: { session } } = await db.auth.getSession();
+      
+      if (session) {
+        currentUser = session.user;
+        renderDashboardPlaceholder();
+        fetchRestaurantData();
+      } else {
+        renderLogin();
+      }
+
+      db.auth.onAuthStateChange((_event, session) => {
+        if (session) {
+          currentUser = session.user;
+          renderDashboardPlaceholder();
+          fetchRestaurantData();
+        } else {
+          currentUser = null;
+          renderLogin();
+        }
+      });
+
+      // Real-time Updates για Μενού, Υλικά και Παραγγελίες
+      db.channel('system-updates')
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'menu_items' }, (payload) => {
+            productsData = productsData.map(p => p.id === payload.new.id ? payload.new : p);
+            if (activeTab === 'products') renderProducts();
+        })
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload) => {
+            const newOrder = payload.new;
+            // Έλεγχος αν αφορά το δικό μας μαγαζί
+            if(restaurantData && newOrder.restaurant_id === restaurantData.id) {
+                ordersData.unshift(newOrder); 
+                playNotificationSound();
+                printOrderReceipt(newOrder);
+                if (activeTab === 'orders') renderOrdersTab();
+            }
+        })
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, (payload) => {
+            if(restaurantData && payload.new.restaurant_id === restaurantData.id) {
+                ordersData = ordersData.map(o => o.id === payload.new.id ? payload.new : o);
+                if (activeTab === 'orders') renderOrdersTab();
+            }
+        })
+        .subscribe();
+    }
+
+    function renderLogin() {
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        <div class="min-h-screen bg-animated flex items-center justify-center p-4">
+          <div class="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full border border-stone-200">
+            <div class="text-center mb-8">
+              <h1 class="text-3xl font-bold text-stone-900 font-sans tracking-tight mb-2">
+                Menu<span class="text-[#C09A5B]">Admin</span>
+              </h1>
+              <p class="text-stone-500 font-medium text-sm">Κεντρική Πύλη Διαχείρισης</p>
+            </div>
+            
+            <form id="loginForm" class="space-y-5">
+              <div>
+                <label class="block text-sm font-semibold text-stone-700 mb-1">Email Καταστήματος</label>
+                <input type="email" id="email" class="w-full border border-stone-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#C09A5B] text-stone-900" required />
+              </div>
+              <div>
+                <label class="block text-sm font-semibold text-stone-700 mb-1">Κωδικός Πρόσβασης</label>
+                <input type="password" id="password" class="w-full border border-stone-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#C09A5B] text-stone-900" required />
+              </div>
+              <div id="authError" class="hidden bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium text-center"></div>
+              <button type="submit" id="loginBtn" class="w-full bg-stone-900 text-white font-bold py-3.5 rounded-lg hover:bg-[#C09A5B] transition-colors">Είσοδος</button>
+            </form>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('loginForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+        const btn = document.getElementById('loginBtn');
+        const errDiv = document.getElementById('authError');
+
+        btn.innerText = "Σύνδεση..."; btn.disabled = true; errDiv.classList.add('hidden');
+        const { error } = await db.auth.signInWithPassword({ email, password });
+        if (error) {
+          errDiv.innerText = "Λάθος email ή κωδικός! Προσπάθησε ξανά.";
+          errDiv.classList.remove('hidden');
+          btn.innerText = "Είσοδος"; btn.disabled = false;
+        }
+      });
+    }
+
+    function renderDashboardPlaceholder() {
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        <div class="min-h-screen bg-animated pb-12">
+          <nav class="bg-stone-900 border-b border-stone-800 sticky top-0 z-10 shadow-lg">
+            <div class="max-w-[1400px] mx-auto px-6 h-16 flex items-center justify-between">
+              <div class="flex items-center gap-3" id="navBrand">
+                <span class="text-xl font-bold text-stone-100 tracking-wider font-serif italic">
+                  Φόρτωση... <span class="text-[#C09A5B] not-italic text-sm ml-1 font-sans">ADMIN</span>
+                </span>
+              </div>
+              <div class="flex items-center gap-4">
+                <span class="text-sm font-medium text-stone-400 hidden sm:block">${currentUser ? currentUser.email : ''}</span>
+                <button onclick="db.auth.signOut()" class="text-sm font-semibold bg-stone-800 text-stone-300 px-4 py-2 rounded-lg hover:bg-red-900 hover:text-white transition-all">Έξοδος</button>
+              </div>
+            </div>
+          </nav>
+          <main class="max-w-[1400px] mx-auto px-6 mt-8">
+            
+            <div id="topControls" class="mb-6 flex flex-col md:flex-row gap-4 items-start md:items-center justify-between hidden">
+              <div id="statsContainer" class="bg-white px-4 py-3 rounded-xl border border-stone-200 shadow-sm flex items-center gap-3 w-64"></div>
+              
+              <div class="relative w-full md:w-80">
+                <input type="text" id="searchInput" placeholder="Αναζήτηση..." class="w-full pl-10 pr-4 py-2.5 border border-stone-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#C09A5B] text-stone-900 shadow-sm">
+                <span class="absolute left-3 top-3 text-stone-400">🔍</span>
+              </div>
+            </div>
+
+            <div id="tabsContainer" class="flex flex-wrap border-b border-stone-900/20 mb-6 hidden">
+                <button onclick="switchTab('orders')" id="tab-orders" class="px-6 py-2.5 text-sm font-bold border-b-2 border-stone-900 text-stone-900 transition-all">Παραγγελίες</button>
+                <button onclick="switchTab('reservations')" id="tab-reservations" class="px-6 py-2.5 text-sm font-semibold border-b-2 border-transparent text-stone-600 hover:text-stone-900 transition-all">Κρατήσεις</button>
+                <button onclick="switchTab('products')" id="tab-products" class="px-6 py-2.5 text-sm font-semibold border-b-2 border-transparent text-stone-600 hover:text-stone-900 transition-all">Προϊόντα</button>
+                <button onclick="switchTab('ingredients')" id="tab-ingredients" class="px-6 py-2.5 text-sm font-semibold border-b-2 border-transparent text-stone-600 hover:text-stone-900 transition-all">Αποθήκη</button>
+            </div>
+
+            <div id="dashboardContent">
+              <div class="flex items-center justify-center py-20 font-bold text-xl text-stone-600">Φόρτωση Δεδομένων...</div>
+            </div>
+
+          </main>
+        </div>
+      `;
+
+      const searchInput = document.getElementById('searchInput');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          searchTerm = e.target.value.toLowerCase();
+          if (activeTab === 'products') renderProducts();
+          else if (activeTab === 'ingredients') renderIngredientsTab();
+          else if (activeTab === 'reservations') renderReservationsTab();
+          // Το Kanban orders δεν χρειάζεται search απαραίτητα
+        });
+      }
+    }
+
+    async function fetchRestaurantData() {
+      const { data: restData, error: restError } = await db.from("restaurants").select("*").eq("owner_id", currentUser.id).single();
+
+      if (restError || !restData) {
+        document.getElementById('dashboardContent').innerHTML = `<div class="py-20 text-center font-bold">Δεν βρέθηκε κατάστημα.</div>`;
+        return;
+      }
+
+      restaurantData = restData;
+      document.getElementById('navBrand').innerHTML = `<span class="text-xl font-bold text-stone-100 tracking-wider font-serif italic">${restaurantData.name} <span class="text-[#C09A5B] not-italic text-sm ml-1 font-sans">ADMIN</span></span>`;
+
+      // Fetch Menu
+      const { data: menuData } = await db.from("menu_items").select("*").eq("restaurant_id", restData.id).order("sort_order", { ascending: true }).order("id", { ascending: true });
+      productsData = menuData || [];
+
+      // Fetch Ingredients
+      const { data: ingData } = await db.from("ingredients").select("*").eq("restaurant_id", restData.id).order("name", { ascending: true });
+      ingredientsData = ingData || [];
+
+      // Fetch Reservations
+      const { data: rData } = await db.from("reservations").select("*").eq("restaurant_id", restData.id).order('date', { ascending: false });
+      reservationsData = rData || [];
+      
+      // Fetch Orders (με λογική απόκρυψης - Retention)
+      const retentionHours = restData.orders_retention_hours || 12;
+      const now = new Date();
+      const { data: ordData } = await db.from("orders").select("*").eq("restaurant_id", restData.id).order('created_at', { ascending: false });
+      
+      if (ordData) {
+        ordersData = ordData.filter(o => {
+          const orderDate = new Date(o.created_at);
+          const diffHours = (now - orderDate) / (1000 * 60 * 60);
+          return diffHours <= retentionHours;
+        });
+      }
+
+      document.getElementById('topControls').classList.remove('hidden');
+      document.getElementById('tabsContainer').classList.remove('hidden');
+      
+      switchTab(activeTab);
+    }
+
+    window.switchTab = function(tab) {
+      activeTab = tab;
+      const tabs = ['orders', 'products', 'ingredients', 'reservations'];
+      
+      document.getElementById('searchInput').value = "";
+      searchTerm = "";
+
+      tabs.forEach(t => {
+        const el = document.getElementById('tab-' + t);
+        if (t === tab) {
+            el.className = "px-6 py-2.5 font-bold text-sm border-b-2 border-stone-900 text-stone-900 transition-all";
+        } else {
+            el.className = "px-6 py-2.5 font-semibold text-sm border-b-2 border-transparent text-stone-600 hover:text-stone-900 transition-all";
+        }
+      });
+
+      if (tab === 'orders') renderOrdersTab();
+      else if (tab === 'products') renderProducts();
+      else if (tab === 'ingredients') renderIngredientsTab();
+      else renderReservationsTab();
+    }
+
+    // === TAB: KANBAN ΠΑΡΑΓΓΕΛΙΩΝ ===
+    function renderOrdersTab() {
+      const content = document.getElementById('dashboardContent');
+      const statsContainer = document.getElementById('statsContainer');
+
+      const activeOrdersCount = ordersData.filter(o => o.prep_status !== 'COMPLETED' && o.prep_status !== 'CANCELLED').length;
+      if (statsContainer) {
+        statsContainer.innerHTML = `
+          <span class="text-2xl">🔥</span>
+          <div>
+            <p class="text-xs text-stone-500 uppercase font-bold tracking-wider">Ενεργες</p>
+            <p class="text-xl font-bold text-stone-800">${activeOrdersCount} Παραγγελίες</p>
+          </div>
+        `;
+      }
+
+      const colWaiting = ordersData.filter(o => o.prep_status === 'WAITING');
+      const colPreparing = ordersData.filter(o => o.prep_status === 'PREPARING');
+      const colReady = ordersData.filter(o => o.prep_status === 'READY');
+      const colCompleted = ordersData.filter(o => o.prep_status === 'COMPLETED');
+
+      function buildCard(order) {
+        const isPaid = order.payment_status === 'PAID';
+        let itemsArray = typeof order.items === 'string' ? JSON.parse(order.items) : order.items;
+        
+        let itemsList = itemsArray.map(i => `
+          <div class="text-sm border-b border-stone-200 pb-2 mb-2 last:border-0">
+            <span class="font-bold text-stone-900">${i.quantity}x ${i.name}</span>
+            ${i.removedIngredients && i.removedIngredients.length > 0 ? `<br><span class="text-xs text-red-500 font-semibold">- Χωρίς: ${i.removedIngredients.join(', ')}</span>` : ''}
+            ${i.itemNote ? `<br><span class="text-xs text-stone-500 italic">"${i.itemNote}"</span>` : ''}
+          </div>
+        `).join('');
+
+        let actionButton = '';
+        if (order.prep_status === 'WAITING') {
+            actionButton = `<button onclick="updateOrder(${order.id}, 'PREPARING')" class="w-full bg-amber-500 text-white font-bold py-2 rounded-lg mt-3 hover:bg-amber-600 transition-colors">→ Στην Κουζίνα</button>`;
+        } else if (order.prep_status === 'PREPARING') {
+            actionButton = `<button onclick="updateOrder(${order.id}, 'READY')" class="w-full bg-blue-500 text-white font-bold py-2 rounded-lg mt-3 hover:bg-blue-600 transition-colors">→ Έτοιμη!</button>`;
+        } else if (order.prep_status === 'READY') {
+            // ΕΔΩ Η ΜΕΓΑΛΗ ΑΛΛΑΓΗ ΓΙΑ ΤΙΣ ΕΤΟΙΜΕΣ ΠΑΡΑΓΓΕΛΙΕΣ
+            if (!isPaid) {
+                actionButton = `<button onclick="completeAndPayOrder(${order.id}, false)" class="w-full bg-red-50 text-red-600 border border-red-200 font-bold py-2.5 rounded-lg mt-3 hover:bg-red-100 transition-colors shadow-sm">💳 ΑΠΛΗΡΩΤΗ (Ταμείο) &rarr;</button>`;
+            } else {
+                actionButton = `<button onclick="completeAndPayOrder(${order.id}, true)" class="w-full bg-emerald-600 text-white font-bold py-2.5 rounded-lg mt-3 hover:bg-emerald-700 transition-colors shadow-sm">✔ Παράδοση (Εξοφλήθηκε)</button>`;
+            }
+        }
+
+        const timeStr = new Date(order.created_at).toLocaleTimeString('el-GR', {hour: '2-digit', minute:'2-digit'});
+
+        return `
+          <div class="bg-white border border-stone-200 rounded-xl p-4 shadow-sm relative mb-4 transition-all">
+            <div class="flex justify-between items-start mb-3 border-b border-stone-100 pb-3">
+              <div>
+                <span class="text-[12px] text-stone-500 font-bold uppercase tracking-widest">#${order.daily_order_number || '-'} · ${timeStr}</span>
+                <h3 class="text-2xl font-bold font-serif text-[#C09A5B] leading-none mt-1">Τρ. ${order.table_number || '-'}</h3>
+              </div>
+              
+              <div class="px-2 py-1.5 rounded-md text-[10px] font-bold border ${isPaid ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}">
+                ${isPaid ? 'ΠΛΗΡΩΘΗΚΕ' : 'ΑΠΛΗΡΩΤΗ'}
+              </div>
+            </div>
+            
+            <div class="mb-3 max-h-48 overflow-y-auto pr-2">${itemsList}</div>
+            
+            <div class="flex justify-between items-center bg-stone-50 p-2 rounded-lg border border-stone-100">
+              <span class="text-xs font-bold text-stone-500">Σύνολο:</span>
+              <span class="font-bold text-lg text-stone-900">€${order.total_amount}</span>
+            </div>
+            
+            ${actionButton}
+            
+            <div class="mt-3 text-center flex justify-between px-2">
+               <button onclick='printOrderReceipt(${JSON.stringify(order).replace(/'/g, "&#39;")})' class="text-xs text-stone-400 hover:text-stone-700 font-medium">🖨️ Επανεκτύπωση</button>
+               <button onclick="updateOrder(${order.id}, 'CANCELLED')" class="text-xs text-red-400 hover:text-red-700 font-medium">❌ Ακύρωση</button>
+            </div>
+          </div>
+        `;
+      }
+
+      content.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 items-start">
+          <div class="bg-stone-100/60 rounded-2xl p-4 border border-stone-200 shadow-inner min-h-[50vh]">
+            <h2 class="font-bold text-stone-800 mb-4 flex items-center justify-between">
+              Νέες (${colWaiting.length}) ${colWaiting.length > 0 ? '<span class="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse"></span>' : ''}
+            </h2>
+            <div>${colWaiting.map(buildCard).join('')}</div>
+          </div>
+          <div class="bg-stone-100/60 rounded-2xl p-4 border border-stone-200 shadow-inner min-h-[50vh]">
+            <h2 class="font-bold text-stone-800 mb-4">Ετοιμάζονται (${colPreparing.length})</h2>
+            <div>${colPreparing.map(buildCard).join('')}</div>
+          </div>
+          <div class="bg-stone-100/60 rounded-2xl p-4 border border-stone-200 shadow-inner min-h-[50vh]">
+            <h2 class="font-bold text-stone-800 mb-4">Έτοιμες (${colReady.length})</h2>
+            <div>${colReady.map(buildCard).join('')}</div>
+          </div>
+          <div class="bg-stone-100/60 rounded-2xl p-4 border border-stone-200 shadow-inner min-h-[50vh] opacity-75">
+            <h2 class="font-bold text-stone-800 mb-4 text-xs uppercase">Ολοκληρωμένες Σήμερα (${colCompleted.length})</h2>
+            <div>${colCompleted.map(buildCard).join('')}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    window.updateOrder = async function(id, newStatus) {
+      if (newStatus === 'CANCELLED' && !confirm('Σίγουρα θέλετε να ακυρώσετε αυτή την παραγγελία;')) return;
+      ordersData = ordersData.map(o => o.id === id ? { ...o, prep_status: newStatus } : o);
+      renderOrdersTab();
+      await db.from("orders").update({ prep_status: newStatus }).eq("id", id);
+    }
+
+     // Η νέα συνάρτηση που Πληρώνει ΚΑΙ Παραδίδει ταυτόχρονα
+    window.completeAndPayOrder = async function(id, isPaid) {
+      if (!isPaid) {
+        const confirmPay = confirm("Επιβεβαίωση Εξόφλησης στο ταμείο & Ολοκλήρωσης της παραγγελίας;");
+        if (!confirmPay) return;
+        
+        // 1. Ενημέρωση τοπικά
+        ordersData = ordersData.map(o => o.id === id ? { ...o, prep_status: 'COMPLETED', payment_status: 'PAID' } : o);
+        renderOrdersTab();
+        
+        // 2. Ενημέρωση στη Βάση (Δύο πεδία μαζί)
+        await db.from("orders").update({ prep_status: 'COMPLETED', payment_status: 'PAID' }).eq("id", id);
+      } else {
+        // Αν είναι ήδη πληρωμένη, απλά την ολοκληρώνουμε
+        ordersData = ordersData.map(o => o.id === id ? { ...o, prep_status: 'COMPLETED' } : o);
+        renderOrdersTab();
+        await db.from("orders").update({ prep_status: 'COMPLETED' }).eq("id", id);
+      }
+    }
+
+
+    // === TAB: ΚΡΑΤΗΣΕΙΣ ===
+    function renderReservationsTab() {
+      const content = document.getElementById('dashboardContent');
+      const statsContainer = document.getElementById('statsContainer');
+
+      const pendingCount = reservationsData.filter(r => r.status === "PENDING").length;
+      if (statsContainer) {
+        statsContainer.innerHTML = `
+          <span class="text-2xl">📅</span>
+          <div>
+            <p class="text-xs text-stone-500 uppercase font-bold tracking-wider">Νεες Κρατησεις</p>
+            <p class="text-xl font-bold text-amber-600">${pendingCount} Σε αναμονή</p>
+          </div>
+        `;
+      }
+
+      if (reservationsData.length === 0) {
+        content.innerHTML = `<div class="bg-white border border-stone-200 rounded-2xl p-10 text-center shadow-sm"><p class="text-stone-500 font-medium text-lg">Δεν υπάρχουν κρατήσεις ακόμα.</p></div>`;
+        return;
+      }
+
+      let html = `<div class="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden"><div class="divide-y divide-stone-100">`;
+      
+      reservationsData.forEach(res => {
+        let statusBadge = '';
+        let rowClass = 'hover:bg-stone-50';
+        
+        if (res.status === "PENDING") { statusBadge = '<span class="px-2 py-1 rounded text-xs font-bold bg-amber-100 text-amber-700">Αναμονή ⏳</span>'; rowClass = 'bg-amber-50/30 hover:bg-amber-50/50'; }
+        if (res.status === "CONFIRMED") statusBadge = '<span class="px-2 py-1 rounded text-xs font-bold bg-emerald-100 text-emerald-700">Επιβεβαιώθηκε ✅</span>';
+        if (res.status === "CANCELLED") statusBadge = '<span class="px-2 py-1 rounded text-xs font-bold bg-red-100 text-red-700">Ακυρώθηκε ❌</span>';
+
+        html += `
+          <div class="p-6 flex flex-col md:flex-row justify-between gap-4 transition-colors ${rowClass}">
+            <div>
+              <div class="flex items-center gap-3 mb-2">
+                <h3 class="font-bold text-xl text-stone-900">${res.name}</h3>
+                ${statusBadge}
+              </div>
+              <div class="text-stone-600 text-sm space-y-1">
+                <p>📧 <strong>Email:</strong> ${res.email || '-'}</p>
+                <p>📅 <strong>Ημ/νια:</strong> ${res.date} &nbsp;|&nbsp; ⏰ <strong>Ώρα:</strong> ${res.time}</p>
+                <p>👥 <strong>Άτομα:</strong> ${res.guests}</p>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-start gap-2 border-l border-stone-200 pl-4">
+              <button onclick="updateReservation(${res.id}, 'CONFIRMED')" class="bg-emerald-600 text-white px-4 py-2 text-sm rounded-md shadow-sm hover:bg-emerald-700 transition-colors">Επιβεβαίωση</button>
+              <button onclick="updateReservation(${res.id}, 'CANCELLED')" class="bg-stone-600 text-white px-4 py-2 text-sm rounded-md shadow-sm hover:bg-stone-700 transition-colors">Ακύρωση</button>
+              <button onclick="updateReservation(${res.id}, 'PENDING')" class="bg-white border border-stone-300 text-stone-700 px-4 py-2 text-sm rounded-md hover:bg-stone-100 transition-colors">Αναμονή</button>
+              
+              <div class="w-full h-[1px] bg-stone-200 my-1 hidden md:block"></div> <button onclick="deleteReservation(${res.id})" class="bg-red-500 text-white px-4 py-2 text-sm rounded-md shadow-sm hover:bg-red-700 transition-colors w-full flex items-center justify-center gap-1">
+                🗑️ Διαγραφή
+              </button>
+            </div>
+          </div>`;
+      });
+      html += `</div></div>`;
+      content.innerHTML = html;
+    }
+
+    window.updateReservation = async function(id, newStatus) {
+      const reservation = reservationsData.find(r => r.id === id);
+      
+      const { data: restaurant } = await db
+        .from("restaurants")
+        .select("email_template_id")
+        .eq("id", reservation.restaurant_id)
+        .single();
+
+      let statusMsg = "";
+      let statusColor = "";
+      
+      if (newStatus === "CONFIRMED") {
+        statusMsg = "Τα καλά νέα μόλις έφτασαν! Η κράτησή σου στη Μαργαρίτα ΕΠΙΒΕΒΑΙΩΘΗΚΕ. Σε περιμένουμε!";
+        statusColor = "#10b981"; 
+      } else if (newStatus === "CANCELLED") {
+        statusMsg = "Λυπούμαστε, αλλά η κράτησή σου ΑΚΥΡΩΘΗΚΕ. Αν πιστεύεις πως έχει γίνει λάθος ή επιθυμείς άλλη ώρα, επικοινώνησε μαζί μας.";
+        statusColor = "#ef4444"; 
+      } else if (newStatus === "PENDING") {
+        statusMsg = "Η κράτησή σου τέθηκε ξανά σε ΑΝΑΜΟΝΗ. Θα εξετάσουμε τη διαθεσιμότητά μας και θα σε ειδοποιήσουμε άμεσα.";
+        statusColor = "#f59e0b"; 
+      }
+
+      if (reservation.email && reservation.email.trim() !== "") {
+        try {
+          const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              service_id: 'service_t7rq0kq',
+              template_id: restaurant.email_template_id,
+              user_id: 'TR0cDisVNKLl4sAOE',
+              template_params: {
+                name: reservation.name,
+                email: reservation.email,
+                date: reservation.date,
+                time: reservation.time,
+                guests: reservation.guests,
+                status_message: statusMsg,
+                color: statusColor
+              }
+            })
+          });
+
+          if (response.ok) {
+            alert("Το email ενημέρωσης στάλθηκε στον πελάτη!");
+          } else {
+            alert("Σφάλμα EmailJS. Δες την κονσόλα!");
+          }
+        } catch (error) {
+          console.error("Σφάλμα δικτύου:", error);
+        }
+      }
+      
+      reservationsData = reservationsData.map(r => r.id === id ? { ...r, status: newStatus } : r);
+      renderReservationsTab();
+      await db.from("reservations").update({ status: newStatus }).eq("id", id);
+    }
+
+    window.deleteReservation = async function(id) {
+      if (confirm("Είστε σίγουρος ότι θέλετε να διαγράψετε οριστικά αυτή την κράτηση;")) {
+        reservationsData = reservationsData.filter(r => r.id !== id);
+        renderReservationsTab();
+        await db.from("reservations").delete().eq("id", id);
+      }
+    }
+
+    // === TAB: ΠΡΟΙΟΝΤΑ ===
+    function renderProducts() {
+      const content = document.getElementById('dashboardContent');
+      const statsContainer = document.getElementById('statsContainer');
+
+      const availableCount = productsData.filter(p => p.status === "AVAILABLE").length;
+      if (statsContainer) {
+        statsContainer.innerHTML = `
+          <span class="text-2xl">🍽️</span>
+          <div>
+            <p class="text-xs text-stone-500 uppercase font-bold tracking-wider">Ενεργα</p>
+            <p class="text-xl font-bold text-stone-800">${availableCount} / ${productsData.length}</p>
+          </div>
+        `;
+      }
+
+      const normalizedSearchTerm = normalizeText(searchTerm).trim();
+      const filteredProducts = productsData.filter(product => {
+        if (!normalizedSearchTerm) return true;
+        const normName = normalizeText(product.name);
+        const normCat = normalizeText(product.category);
+
+        if (normName.includes(normalizedSearchTerm) || normCat.includes(normalizedSearchTerm)) return true;
+
+        if (normCat) {
+          for (const [catKey, keywords] of Object.entries(categorySynonyms)) {
+            if (normCat.includes(catKey)) {
+              const matchFound = keywords.some(kw => kw.includes(normalizedSearchTerm) || normalizedSearchTerm.includes(kw));
+              if (matchFound) return true;
+            }
+          }
+        }
+        return false;
+      });
+    
+      const customCategoryOrder = ['Ορεκτικά', 'Σαλάτες', 'Ζυμαρικά', 'Gnocchi', 'Πίτσες', 'Αναψυκτικά'];
+
+      filteredProducts.sort((a, b) => {
+        let catA = customCategoryOrder.indexOf(a.category);
+        let catB = customCategoryOrder.indexOf(b.category);
+        if (catA === -1) catA = 99;
+        if (catB === -1) catB = 99;
+        if (catA !== catB) return catA - catB;
+        if (a.sort_order !== b.sort_order) return (a.sort_order || 999) - (b.sort_order || 999);
+        return a.id - b.id;
+      });
+
+      if (filteredProducts.length === 0) {
+        content.innerHTML = `<div class="bg-white border border-stone-200 rounded-2xl p-10 text-center shadow-sm"><p class="text-stone-500 font-medium text-lg">Δεν βρέθηκαν προϊόντα.</p></div>`;
+        return;
+      }
+
+      let html = `<div class="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden"><div class="divide-y divide-stone-100">`;
+
+      filteredProducts.forEach(product => {
+        let missingToday = [];
+        let missingPerm = [];
+        let productIngs = [];
+        
+        if (typeof product.ingredients === 'string') {
+          try { productIngs = JSON.parse(product.ingredients); } catch(e) {}
+        } else if (Array.isArray(product.ingredients)) {
+          productIngs = product.ingredients;
+        }
+
+        if (productIngs.length > 0) {
+          productIngs.forEach(ingName => {
+            const globalIng = ingredientsData.find(i => normalizeText(i.name).trim() === normalizeText(ingName).trim());
+            if (globalIng) {
+              if (globalIng.status === 'UNAVAILABLE_TODAY') missingToday.push(globalIng.name);
+              else if (globalIng.status === 'UNAVAILABLE') missingPerm.push(globalIng.name);
+            }
+          });
+        }
+
+        let missingHtml = '';
+        if (missingToday.length > 0) {
+          missingHtml += `<div class="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded mt-1.5 inline-block mr-2">⚠️ Προσωρινά χωρίς: ${missingToday.join(', ')}</div>`;
+        }
+        if (missingPerm.length > 0) {
+          missingHtml += `<div class="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded mt-1.5 inline-block">⚠️ Μη διαθέσιμο: ${missingPerm.join(', ')}</div>`;
+        }
+
+        let statusBadge = '';
+        if (product.status === "AVAILABLE") statusBadge = '<span class="px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700">Διαθέσιμο</span>';
+        if (product.status === "UNAVAILABLE_TODAY") statusBadge = '<span class="px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-700">Εξαντλήθηκε</span>';
+        if (product.status === "UNAVAILABLE") statusBadge = '<span class="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700">Μη Διαθέσιμο</span>';
+        if (product.status === "HIDDEN") statusBadge = '<span class="px-2 py-0.5 rounded text-xs font-bold bg-stone-200 text-stone-600">Αόρατο</span>';
+
+        let nameClass = product.status === "HIDDEN" ? "text-stone-400 line-through" : "text-stone-900";
+        let btnActive = product.status === "AVAILABLE" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-700";
+        let btnToday = product.status === "UNAVAILABLE_TODAY" ? "bg-white text-amber-600 shadow-sm" : "text-stone-500 hover:text-stone-700";
+        let btnClosed = product.status === "UNAVAILABLE" ? "bg-white text-red-600 shadow-sm" : "text-stone-500 hover:text-stone-700";
+        let btnHidden = product.status === "HIDDEN" ? "bg-white text-stone-800 shadow-sm" : "text-stone-500 hover:text-stone-700";
+
+        html += `
+          <div class="p-5 flex flex-col xl:flex-row xl:items-center justify-between gap-4 hover:bg-stone-50 transition-colors">
+            <div>
+              <div class="flex items-center gap-3">
+                <h3 class="text-base font-bold font-serif text-lg ${nameClass}">${product.name}</h3>
+                ${statusBadge}
+              </div>
+              <div class="text-sm text-stone-500 mt-1">${product.category || 'Χωρίς Κατηγορία'}</div>
+              ${missingHtml}
+            </div>
+            <div class="flex bg-stone-100 p-1 rounded-lg border border-stone-200 self-start flex-wrap">
+              <button onclick="changeStatus(${product.id}, 'AVAILABLE')" class="px-4 py-2 text-sm font-semibold rounded-md transition-all ${btnActive}">Ενεργό ✅</button>
+              <button onclick="changeStatus(${product.id}, 'UNAVAILABLE_TODAY')" class="px-4 py-2 text-sm font-semibold rounded-md transition-all ${btnToday}">Για Σήμερα ✖</button>
+              <button onclick="changeStatus(${product.id}, 'UNAVAILABLE')" class="px-4 py-2 text-sm font-semibold rounded-md transition-all ${btnClosed}">Οριστικά ❌</button>
+              <button onclick="changeStatus(${product.id}, 'HIDDEN')" class="px-4 py-2 text-sm font-semibold rounded-md transition-all ${btnHidden}">Απόκρυψη 👁️</button>
+            </div>
+          </div>`;
+      });
+
+      html += `</div></div>`;
+      content.innerHTML = html;
+    }
+
+    window.changeStatus = async function(id, newStatus) {
+      productsData = productsData.map(p => p.id === id ? { ...p, status: newStatus } : p);
+      renderProducts();
+      await db.from("menu_items").update({ status: newStatus }).eq("id", id);
+    }
+
+    // === TAB: ΑΠΟΘΗΚΗ ===
+    function renderIngredientsTab() {
+      const content = document.getElementById('dashboardContent');
+      const statsContainer = document.getElementById('statsContainer');
+
+      const missingCount = ingredientsData.filter(i => i.status !== "AVAILABLE").length;
+      if (statsContainer) {
+        statsContainer.innerHTML = `
+          <span class="text-2xl">📦</span>
+          <div>
+            <p class="text-xs text-stone-500 uppercase font-bold tracking-wider">Σε Ελλειψη</p>
+            <p class="text-xl font-bold text-stone-800">${missingCount} Υλικά</p>
+          </div>
+        `;
+      }
+
+      const normalizedSearchTerm = normalizeText(searchTerm).trim();
+      const filteredIngredients = ingredientsData.filter(ing => {
+        return normalizeText(ing.name).includes(normalizedSearchTerm);
+      });
+
+      let html = `<div class="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden mt-2"><div class="divide-y divide-stone-100">`;
+
+      if (filteredIngredients.length === 0) {
+        html += `<div class="p-8 text-center text-stone-500">Δεν βρέθηκαν υλικά.</div>`;
+      }
+
+      filteredIngredients.forEach(ing => {
+        let statusBadge = '';
+        if (ing.status === "AVAILABLE") statusBadge = '<span class="px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700">Διαθέσιμο</span>';
+        if (ing.status === "UNAVAILABLE_TODAY") statusBadge = '<span class="px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-700">Μόνο για Σήμερα ✖</span>';
+        if (ing.status === "UNAVAILABLE") statusBadge = '<span class="px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700">Οριστικά Εκτός</span>';
+
+        let nameClass = ing.status !== "AVAILABLE" ? "text-stone-400 line-through" : "text-stone-900";
+        let btnActive = ing.status === "AVAILABLE" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-700";
+        let btnToday = ing.status === "UNAVAILABLE_TODAY" ? "bg-white text-amber-600 shadow-sm" : "text-stone-500 hover:text-stone-700";
+        let btnClosed = ing.status === "UNAVAILABLE" ? "bg-white text-red-600 shadow-sm" : "text-stone-500 hover:text-stone-700";
+
+        html += `
+          <div class="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-stone-50 transition-colors">
+            <div class="flex items-center gap-3">
+              <h3 class="text-base font-bold text-lg ${nameClass}">${ing.name}</h3>
+              ${statusBadge}
+            </div>
+            <div class="flex bg-stone-100 p-1 rounded-lg border border-stone-200 self-start">
+              <button onclick="changeIngredientStatus(${ing.id}, 'AVAILABLE')" class="px-4 py-2 text-sm font-semibold rounded-md transition-all ${btnActive}">Διαθέσιμο ✅</button>
+              <button onclick="changeIngredientStatus(${ing.id}, 'UNAVAILABLE_TODAY')" class="px-4 py-2 text-sm font-semibold rounded-md transition-all ${btnToday}">Για Σήμερα ✖</button>
+              <button onclick="changeIngredientStatus(${ing.id}, 'UNAVAILABLE')" class="px-4 py-2 text-sm font-semibold rounded-md transition-all ${btnClosed}">Οριστικά ❌</button>
+            </div>
+          </div>`;
+      });
+      html += `</div></div>`;
+      content.innerHTML = html;
+    }
+
+    window.changeIngredientStatus = async function(id, newStatus) {
+      ingredientsData = ingredientsData.map(i => i.id === id ? { ...i, status: newStatus } : i);
+      renderIngredientsTab();
+      if (activeTab === 'products') renderProducts();
+      await db.from("ingredients").update({ status: newStatus }).eq("id", id);
+    }
+
+    init();
+  </script>
+</body>
+</html>
