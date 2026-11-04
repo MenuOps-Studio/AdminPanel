@@ -214,9 +214,14 @@
             productsData = productsData.map(p => p.id === payload.new.id ? payload.new : p);
             if (activeTab === 'products') renderProducts();
         })
+        // ΝΕΟ: Ζωντανή ενημέρωση ΚΑΙ για τα υλικά
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'ingredients' }, (payload) => {
+            ingredientsData = ingredientsData.map(i => i.id === payload.new.id ? payload.new : i);
+            if (activeTab === 'ingredients') renderIngredientsTab();
+            if (activeTab === 'products') renderProducts(); // Ανανεώνει και τα πιάτα, γιατί δείχνουν τα εξαντλημένα υλικά!
+        })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload) => {
             const newOrder = payload.new;
-            // Έλεγχος αν αφορά το δικό μας μαγαζί
             if(restaurantData && newOrder.restaurant_id === restaurantData.id) {
                 ordersData.unshift(newOrder); 
                 playNotificationSound();
