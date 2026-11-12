@@ -117,7 +117,6 @@
 
       const shopName = restaurantData && restaurantData.name ? restaurantData.name : 'ΠΑΡΑΓΓΕΛΙΑ';
       
-      // ΝΕΑ ΕΞΥΠΝΗ ΛΟΓΙΚΗ ΓΙΑ ΤΟ ΧΑΡΤΑΚΙ (DELIVERY / ΤΡΑΠΕΖΙ / TAKEAWAY)
       let orderTypeBanner = '';
       let customerDetails = '';
 
@@ -171,6 +170,16 @@
         </div>
         
         <div style="border-top: 2px dashed #000; padding-top: 15px;">
+          ${Number(order.delivery_fee) > 0 ? `
+            <div style="display: flex; justify-content: space-between; font-size: 16px; margin-bottom: 5px;">
+              <span>Υποσύνολο</span>
+              <span>€${(Number(order.total_amount) - Number(order.delivery_fee)).toFixed(2)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 16px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #000;">
+              <span>Διανομή ${order.delivery_zone ? `(${order.delivery_zone})` : ''}</span>
+              <span>€${Number(order.delivery_fee).toFixed(2)}</span>
+            </div>
+          ` : ''}
           <div style="display: flex; justify-content: space-between; font-size: 20px; font-weight: 900;">
             <span>ΣΥΝΟΛΟ</span>
             <span>€${Number(order.total_amount).toFixed(2)}</span>
