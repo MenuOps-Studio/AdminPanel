@@ -95,12 +95,19 @@
       
       let itemsHtml = '';
       itemsArray.forEach(item => {
+        // Υπολογισμός τιμής: Ποσότητα * Τιμή τεμαχίου
+        const itemPrice = item.price ? Number(item.price) : 0;
+        const lineTotal = (itemPrice * item.quantity).toFixed(2);
+        
         itemsHtml += `
           <div style="margin-bottom: 8px;">
             <div style="display: flex; justify-content: space-between; font-size: 16px; font-weight: bold; line-height: 1.2;">
               <div style="flex-grow: 1;">
                 <span style="display: inline-block; width: 28px; font-weight: 900;">${item.quantity}x</span> 
                 ${item.name}
+              </div>
+              <div style="white-space: nowrap; padding-left: 10px;">
+                €${lineTotal}
               </div>
             </div>
             ${item.removedIngredients && item.removedIngredients.length > 0 ? 
@@ -140,6 +147,16 @@
         }
       }
 
+      // Μετάφραση ζώνης διανομής
+      let zoneDisplay = '';
+      if (order.delivery_zone === 'inner') {
+        zoneDisplay = 'Εντός Πόλης';
+      } else if (order.delivery_zone === 'outer') {
+        zoneDisplay = 'Εκτός Πόλης';
+      } else if (order.delivery_zone) {
+        zoneDisplay = order.delivery_zone; // Fallback αν στείλεις κάτι άλλο
+      }
+
       printDiv.innerHTML = `
         <style>
           @media print {
@@ -176,7 +193,7 @@
               <span>€${(Number(order.total_amount) - Number(order.delivery_fee)).toFixed(2)}</span>
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 16px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #000;">
-              <span>Διανομή ${order.delivery_zone ? `(${order.delivery_zone})` : ''}</span>
+              <span>Διανομή ${zoneDisplay ? `(${zoneDisplay})` : ''}</span>
               <span>€${Number(order.delivery_fee).toFixed(2)}</span>
             </div>
           ` : ''}
@@ -458,7 +475,6 @@
         } else if (order.prep_status === 'PREPARING') {
             actionButton = `<button onclick="updateOrder(${order.id}, 'READY')" class="w-full bg-blue-500 text-white font-bold py-2 rounded-lg mt-3 hover:bg-blue-600 transition-colors">→ Έτοιμη!</button>`;
         } else if (order.prep_status === 'READY') {
-            // ΕΔΩ Η ΜΕΓΑΛΗ ΑΛΛΑΓΗ ΓΙΑ ΤΙΣ ΕΤΟΙΜΕΣ ΠΑΡΑΓΓΕΛΙΕΣ
             if (!isPaid) {
                 actionButton = `<button onclick="completeAndPayOrder(${order.id}, false)" class="w-full bg-red-50 text-red-600 border border-red-200 font-bold py-2.5 rounded-lg mt-3 hover:bg-red-100 transition-colors shadow-sm">💳 ΑΠΛΗΡΩΤΗ (Ταμείο) &rarr;</button>`;
             } else {
@@ -473,7 +489,9 @@
             <div class="flex justify-between items-start mb-3 border-b border-stone-100 pb-3">
               <div>
                 <span class="text-[12px] text-stone-500 font-bold uppercase tracking-widest">#${order.daily_order_number || '-'} · ${timeStr}</span>
-                <h3 class="text-2xl font-bold font-serif text-[#C09A5B] leading-none mt-1">Τρ. ${order.table_number || '-'}</h3>
+                <h3 class="text-2xl font-bold font-serif text-[#C09A5B] leading-none mt-1">
+                  ${order.order_type === 'DELIVERY' ? '🛵 Διανομή' : (order.table_number ? 'Τρ. ' + order.table_number : '🛍️ Πακέτο')}
+                </h3>
               </div>
               
               <div class="px-2 py-1.5 rounded-md text-[10px] font-bold border ${isPaid ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}">
@@ -483,9 +501,21 @@
             
             <div class="mb-3 max-h-48 overflow-y-auto pr-2">${itemsList}</div>
             
-            <div class="flex justify-between items-center bg-stone-50 p-2 rounded-lg border border-stone-100">
-              <span class="text-xs font-bold text-stone-500">Σύνολο:</span>
-              <span class="font-bold text-lg text-stone-900">€${order.total_amount}</span>
+            <div class="flex flex-col gap-1 bg-stone-50 p-3 rounded-lg border border-stone-100 mb-3">
+              ${Number(order.delivery_fee) > 0 ? `
+                <div class="flex justify-between items-center text-sm">
+                  <span class="text-stone-500 font-medium">Υποσύνολο:</span>
+                  <span class="text-stone-700 font-semibold">€${(Number(order.total_amount) - Number(order.delivery_fee)).toFixed(2)}</span>
+                </div>
+                <div class="flex justify-between items-center text-sm border-b border-stone-200 pb-1 mb-1">
+                  <span class="text-stone-500 font-medium">Διανομή ${order.delivery_zone ? `(${order.delivery_zone})` : ''}:</span>
+                  <span class="text-stone-700 font-semibold">€${Number(order.delivery_fee).toFixed(2)}</span>
+                </div>
+              ` : ''}
+              <div class="flex justify-between items-center mt-1">
+                <span class="text-xs font-bold text-stone-500 uppercase">Τελικο Συνολο:</span>
+                <span class="font-bold text-lg text-stone-900">€${Number(order.total_amount).toFixed(2)}</span>
+              </div>
             </div>
             
             ${actionButton}
